@@ -142,24 +142,57 @@ What it does per line:
 - **create** — detects static vs regular class, writes a `With*` or `Using*` stub, flags factory candidates in a comment.
 - **rename** — renames the `*Tests.cs` file to `With*` or `Using*` and updates the class declaration inside it.
 
-### 3 — Implement the actual tests
+### 3 — Implement the actual tests (parallel)
 
-Do not stop after scaffolding. Immediately proceed to implement real test methods for every file that was just created or renamed.
+Do not stop after scaffolding. Immediately proceed to implement real test bodies for every file that was just created or renamed. Process files in parallel: issue multiple Read + Edit tool calls in a single response whenever the files are independent of each other.
 
-For each file in the batch:
+#### Per-file process
 
-1. Read the corresponding source file to understand its full public API.
-2. Replace every `Placeholder()` / `Assert.Inconclusive` with real test methods following Steps 4–6 above.
-3. For DTOs: fill in all properties in the round-trip test and remove the `Assert.Inconclusive` from the DateTime Kind test (or remove that test entirely if the DTO has no `DateTime` properties).
-4. For exception classes: test construction with message, construction with message and inner exception, and that the type derives from the expected base exception.
-5. For static utility/extension classes: test each public method — happy path, boundary values, and invalid-argument throws.
-6. If a stub comment flags a factory candidate, decide whether a separate `Creating*` file is warranted and create it if so.
+For each stub file:
 
-Work through files in priority order:
-- DTOs and classes with non-trivial behaviour first.
-- Enum-like and constant classes last (they often need only trivial coverage).
+1. **Read in parallel** — issue one `Read` call for the stub file and one `Read` call for its corresponding source file in the same response.
+2. **Identify all public members** from the source: constructors, public methods, public properties with logic, operators, and static factory methods.
+3. **Replace** the entire body of `Placeholder()` / `Assert.Inconclusive` with real test methods. Keep the file structure (namespace, class declaration, grouping comments) and only replace the method content.
 
-After completing all files, run `find-untested.ps1` again to confirm full coverage.
+#### What to test per class type
+
+**Regular class (`With*`)**
+- Each public constructor: valid args set expected state; invalid args throw.
+- Each public method: happy path, boundary values, invalid-argument throws.
+- Equality / comparison operators if defined.
+
+**Static or extension class (`Using*`)**
+- Each static method: happy path, null/empty inputs throw, boundary values.
+
+**Factory class (`Creating*`)**
+- Each factory method: returned instance has correct initial state.
+- Singleton factories: same reference returned on repeated calls.
+- Invalid args throw.
+
+**DTO (`With*`, detected as DTO)**
+- Fill in every public property in the round-trip test with explicit values.
+- Assert each property individually after deserialization.
+- For `DateTime` properties: assert both value and `Kind`; use `DateTimeKind.Utc`.
+- If no `DateTime` properties exist, remove `Serialization_DateTimeProperties_KindIsPreserved`.
+
+**Exception class (`For*UnitTests`)**
+- Default constructor: `Message` is non-empty.
+- `(string message)` constructor: `Message` equals the argument.
+- `(string message, Exception inner)` constructor: both `Message` and `InnerException` set correctly.
+- The type is assignable to its expected base (e.g. `Assert.IsInstanceOfType<Exception>(ex)`).
+
+**Enum or constants class**
+- Verify that each named value exists and has the expected underlying value.
+- If the enum is used as a bitmask, verify flag combinations.
+
+#### Parallelism guidance
+
+- Read all source files for a batch in one parallel `Read` burst.
+- Write all updated test files in one parallel `Edit` burst where content is independent.
+- Break into smaller bursts (8–12 files) if the batch is very large to keep context manageable.
+- If a file requires significant design decisions (e.g. a complex factory), handle it alone rather than in a burst.
+
+After all files are written, run `find-untested.ps1` one final time to confirm full coverage.
 
 ### 4 — Confirm with the user before writing
 
