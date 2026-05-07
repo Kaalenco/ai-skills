@@ -32,6 +32,21 @@ A class may have both instance and factory methods. In that case, create separat
 
 Read the relevant pattern file before generating test code.
 
+## Step 2b — DTO detection: JSON serialization tests
+
+Before generating test methods, check whether the class is a DTO:
+
+| Signal | Example |
+|--------|---------|
+| Name ends in `Model` (case-insensitive) | `UserModel`, `CreateOrderModel` |
+| Name ends in `Dto` (case-insensitive) | `TokenDto`, `UserDto` |
+| Implements `ICommandRequest` | `class CreateUserRequest : ICommandRequest` |
+| Implements `ICommandResponse` | `class CreateUserResponse : ICommandResponse` |
+
+If any signal matches, read `patterns/dto-class.md` and generate serialization tests instead of a generic placeholder.
+
+**DateTime rule:** always use `DateTimeKind.Utc` in test data. `System.Text.Json` appends `Z` for Utc and round-trips `Kind` correctly. `DateTimeKind.Local` serializes without `Z` and deserializes as `Unspecified`, silently losing timezone intent. Assert both the value **and** `.Kind` for every `DateTime` property.
+
 ## Step 3 — Namespace convention
 
 `UnitTests` must NOT appear in the namespace — only in the project/assembly name.

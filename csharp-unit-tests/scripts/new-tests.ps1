@@ -11,6 +11,9 @@
       - public static class → Using<ClassName>
       - anything else       → With<ClassName>
 
+    DTO detection (name ends in Model/Dto, or implements ICommandRequest/ICommandResponse):
+    generates a JSON serialization stub instead of a generic placeholder.
+
     Factory method detection (Creating<ClassName>) requires human judgement — the
     script flags candidates in the stub comment but does not create a separate file.
 
@@ -84,6 +87,14 @@ function Get-TestNamespace ([string]$RelativePath, [string]$Root) {
     return "$Root.$($parts -join '.')"
 }
 
+function Test-IsDto ([string]$SourceFile, [string]$ClassName) {
+    if ($ClassName -match '(?i)(Model|Dto)$') { return $true }
+    $content = Get-Content $SourceFile -Raw
+    if ($content -match 'class\s+\w+[^{]*:\s*[^{]*\bICommandRequest\b') { return $true }
+    if ($content -match 'class\s+\w+[^{]*:\s*[^{]*\bICommandResponse\b') { return $true }
+    return $false
+}
+
 function New-Stub ([string]$Prefix, [string]$ClassName, [string]$Namespace, [bool]$HasFactories) {
     $factoryNote = if ($HasFactories) {
         "`n    // NOTE: $ClassName has static factory methods — consider a separate Creating$ClassName test class."
@@ -101,6 +112,81 @@ public sealed class $Prefix$ClassName
     public void Placeholder()
     {
         // TODO
+    }
+}
+"@
+}
+
+function New-DtoStub ([string]$ClassName, [string]$Namespace) {
+    return @"
+using System.Text.Json;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+namespace $Namespace;
+
+[TestClass]
+public sealed class With$ClassName
+{
+    // -------------------------------------------------------------------------
+    // JSON serialization
+    // -------------------------------------------------------------------------
+
+    [TestMethod]
+    public void Serialization_RoundTrip_PreservesAllProperties()
+    {
+        var dto = new $ClassName
+        {
+            // TODO: assign every public property with explicit, culture-neutral values.
+            // DateTime: always use DateTimeKind.Utc — Local and Unspecified do not
+            // survive a System.Text.Json round-trip with their Kind intact.
+            //   e.g. CreatedAt = new DateTime(2024, 6, 15, 10, 30, 0, DateTimeKind.Utc)
+        };
+
+        var json   = JsonSerializer.Serialize(dto);
+        var result = JsonSerializer.Deserialize<$ClassName>(json);
+
+        Assert.IsNotNull(result);
+        // TODO: assert each property by value.
+        // For DateTime properties assert both value and Kind to catch locale drift:
+        //   Assert.AreEqual(dto.CreatedAt, result.CreatedAt);
+        //   Assert.AreEqual(DateTimeKind.Utc, result.CreatedAt.Kind);
+    }
+
+    [TestMethod]
+    public void Serialization_DateTimeProperties_KindIsPreserved()
+    {
+        // System.Text.Json round-trips DateTimeKind.Utc correctly (appends 'Z').
+        // DateTimeKind.Local becomes Unspecified on deserialize — use Utc in DTOs.
+        var utcValue = new DateTime(2024, 6, 15, 10, 30, 0, DateTimeKind.Utc);
+        var dto = new $ClassName
+        {
+            // TODO: set the DateTime property under test
+            //   SomeDateProperty = utcValue
+        };
+
+        var json   = JsonSerializer.Serialize(dto);
+        var result = JsonSerializer.Deserialize<$ClassName>(json);
+
+        Assert.IsNotNull(result);
+        // TODO: replace with actual DateTime property name
+        //   Assert.AreEqual(utcValue, result.SomeDateProperty);
+        //   Assert.AreEqual(DateTimeKind.Utc, result.SomeDateProperty.Kind);
+        Assert.Inconclusive("Replace TODOs with the actual DateTime property name.");
+    }
+
+    [TestMethod]
+    public void Deserialization_EmptyJson_ReturnsDefaultInstance()
+    {
+        var result = JsonSerializer.Deserialize<$ClassName>("{}");
+        Assert.IsNotNull(result);
+    }
+
+    [TestMethod]
+    public void Deserialization_UnknownProperties_AreIgnored()
+    {
+        var json   = "{\"__unknown\": 42}";
+        var result = JsonSerializer.Deserialize<$ClassName>(json);
+        Assert.IsNotNull(result);
     }
 }
 "@
@@ -142,8 +228,13 @@ foreach ($line in $plan) {
         'create' {
             $prefix      = Get-Prefix $sourceFile
             $namespace   = Get-TestNamespace $relative $rootNs
-            $hasFactory  = Test-HasFactoryMethods $sourceFile $baseName
-            $stub        = New-Stub $prefix $baseName $namespace $hasFactory
+            $isDto       = Test-IsDto $sourceFile $baseName
+            $hasFactory  = -not $isDto -and (Test-HasFactoryMethods $sourceFile $baseName)
+            $stub        = if ($isDto) {
+                               New-DtoStub $baseName $namespace
+                           } else {
+                               New-Stub $prefix $baseName $namespace $hasFactory
+                           }
 
             $outName = "$prefix$baseName.cs"
             $outFile = if ($subFolder) {
@@ -153,7 +244,9 @@ foreach ($line in $plan) {
             }
 
             if ($WhatIf) {
-                $tag = if ($hasFactory) { ' [factory candidate]' } else { '' }
+                $tag = if ($isDto)       { ' [dto]' }
+                       elseif ($hasFactory) { ' [factory candidate]' }
+                       else              { '' }
                 Write-Host "[create] $(Get-RelativeTestPath $outFile)$tag" -ForegroundColor Green
             } elseif (Test-Path $outFile) {
                 Write-Host "[skip]   $(Get-RelativeTestPath $outFile) already exists" -ForegroundColor DarkGray
