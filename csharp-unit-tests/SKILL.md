@@ -17,15 +17,18 @@ Naming rule:
 
 Place the test project in a sibling folder next to the main project.
 
-## Step 2 — Choose the test class prefix
+## Step 2 — Choose the test class name
 
-Inspect the target class to determine the correct prefix:
+Inspect the target class to determine the correct naming:
 
-| Target | Prefix | Pattern file |
-|--------|--------|-------------|
-| Regular class (instance methods) | `With<ClassName>` | `patterns/regular-class.md` |
-| Static class or static method group | `Using<ClassName>` | `patterns/static-class.md` |
-| Factory methods (static creators returning instances) | `Creating<ClassName>` | `patterns/factory-class.md` |
+| Target | Test class name | File name | Pattern file |
+|--------|----------------|-----------|-------------|
+| Exception class (name ends in `Exception`) | `For<ClassName>UnitTests` | `For<ClassName>UnitTests.cs` | `patterns/regular-class.md` |
+| Regular class (instance methods) | `With<ClassName>` | `With<ClassName>.cs` | `patterns/regular-class.md` |
+| Static class or static method group | `Using<ClassName>` | `Using<ClassName>.cs` | `patterns/static-class.md` |
+| Factory methods (static creators returning instances) | `Creating<ClassName>` | `Creating<ClassName>.cs` | `patterns/factory-class.md` |
+
+**Exception classes** use `For<ClassName>UnitTests` to avoid the CA1711 analyser warning that forbids class names ending in `Exception`. This is the only case where `UnitTests` appears in a class name.
 
 A class may have both instance and factory methods. In that case, create separate test files:
 `With<ClassName>.cs` for instance tests, `Creating<ClassName>.cs` for factory tests.
@@ -139,13 +142,24 @@ What it does per line:
 - **create** — detects static vs regular class, writes a `With*` or `Using*` stub, flags factory candidates in a comment.
 - **rename** — renames the `*Tests.cs` file to `With*` or `Using*` and updates the class declaration inside it.
 
-### 3 — Fill in the stubs
+### 3 — Implement the actual tests
 
-After the script runs, all new test files contain a single `Placeholder()` method marked `// TODO`. For each file:
+Do not stop after scaffolding. Immediately proceed to implement real test methods for every file that was just created or renamed.
 
-1. Read the source class to understand its public surface.
-2. Replace `Placeholder()` with real test methods following Steps 4–6 above.
-3. If the stub comment flags a factory candidate, decide whether a separate `Creating*` file is warranted.
+For each file in the batch:
+
+1. Read the corresponding source file to understand its full public API.
+2. Replace every `Placeholder()` / `Assert.Inconclusive` with real test methods following Steps 4–6 above.
+3. For DTOs: fill in all properties in the round-trip test and remove the `Assert.Inconclusive` from the DateTime Kind test (or remove that test entirely if the DTO has no `DateTime` properties).
+4. For exception classes: test construction with message, construction with message and inner exception, and that the type derives from the expected base exception.
+5. For static utility/extension classes: test each public method — happy path, boundary values, and invalid-argument throws.
+6. If a stub comment flags a factory candidate, decide whether a separate `Creating*` file is warranted and create it if so.
+
+Work through files in priority order:
+- DTOs and classes with non-trivial behaviour first.
+- Enum-like and constant classes last (they often need only trivial coverage).
+
+After completing all files, run `find-untested.ps1` again to confirm full coverage.
 
 ### 4 — Confirm with the user before writing
 

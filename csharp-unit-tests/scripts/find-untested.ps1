@@ -60,9 +60,15 @@ foreach ($file in $sourceFiles) {
     # Skip interfaces — they have no testable implementation
     if ($baseName -match '^I[A-Z]') { continue }
 
-    $hasTest = ($testFileNames -contains "With$baseName") -or
-               ($testFileNames -contains "Using$baseName") -or
-               ($testFileNames -contains "Creating$baseName")
+    # Exception classes use For*UnitTests naming to satisfy CA1711
+    $isException = $baseName -match 'Exception$'
+    $hasTest = if ($isException) {
+                   $testFileNames -contains "For${baseName}UnitTests"
+               } else {
+                   ($testFileNames -contains "With$baseName") -or
+                   ($testFileNames -contains "Using$baseName") -or
+                   ($testFileNames -contains "Creating$baseName")
+               }
 
     $relative = [IO.Path]::GetRelativePath($sourceDir, $file.FullName)
 

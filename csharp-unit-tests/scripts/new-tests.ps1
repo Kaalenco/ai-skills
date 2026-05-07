@@ -7,9 +7,10 @@
       create entries: writes a minimal test stub with the correct With*/Using* prefix.
       rename entries: renames the existing *Tests.cs file and updates the class declaration.
 
-    Prefix heuristic:
-      - public static class → Using<ClassName>
-      - anything else       → With<ClassName>
+    Naming heuristics:
+      - name ends in Exception        → For<ClassName>UnitTests  (avoids CA1711)
+      - public static class           → Using<ClassName>
+      - anything else                 → With<ClassName>
 
     DTO detection (name ends in Model/Dto, or implements ICommandRequest/ICommandResponse):
     generates a JSON serialization stub instead of a generic placeholder.
@@ -85,6 +86,28 @@ function Get-TestNamespace ([string]$RelativePath, [string]$Root) {
     if ([string]::IsNullOrEmpty($dir)) { return $Root }
     $parts = $dir.Split([IO.Path]::DirectorySeparatorChar) | Where-Object { $_ }
     return "$Root.$($parts -join '.')"
+}
+
+function Test-IsException ([string]$ClassName) {
+    return $ClassName -match 'Exception$'
+}
+
+function New-ExceptionStub ([string]$ClassName, [string]$Namespace) {
+    return @"
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+namespace $Namespace;
+
+[TestClass]
+public sealed class For${ClassName}UnitTests
+{
+    [TestMethod]
+    public void Placeholder()
+    {
+        // TODO
+    }
+}
+"@
 }
 
 function Test-IsDto ([string]$SourceFile, [string]$ClassName) {
@@ -226,17 +249,17 @@ foreach ($line in $plan) {
     switch ($action) {
 
         'create' {
-            $prefix      = Get-Prefix $sourceFile
+            $isException = Test-IsException $baseName
+            $isDto       = -not $isException -and (Test-IsDto $sourceFile $baseName)
+            $prefix      = if ($isException -or $isDto) { 'With' } else { Get-Prefix $sourceFile }
             $namespace   = Get-TestNamespace $relative $rootNs
-            $isDto       = Test-IsDto $sourceFile $baseName
-            $hasFactory  = -not $isDto -and (Test-HasFactoryMethods $sourceFile $baseName)
-            $stub        = if ($isDto) {
-                               New-DtoStub $baseName $namespace
-                           } else {
-                               New-Stub $prefix $baseName $namespace $hasFactory
-                           }
+            $hasFactory  = -not $isException -and -not $isDto -and (Test-HasFactoryMethods $sourceFile $baseName)
 
-            $outName = "$prefix$baseName.cs"
+            $outName = if ($isException) { "For${baseName}UnitTests.cs" } else { "$prefix$baseName.cs" }
+            $stub    = if ($isException) { New-ExceptionStub $baseName $namespace }
+                       elseif ($isDto)  { New-DtoStub $baseName $namespace }
+                       else             { New-Stub $prefix $baseName $namespace $hasFactory }
+
             $outFile = if ($subFolder) {
                 Join-Path $testDir $subFolder $outName
             } else {
@@ -244,9 +267,10 @@ foreach ($line in $plan) {
             }
 
             if ($WhatIf) {
-                $tag = if ($isDto)       { ' [dto]' }
+                $tag = if ($isException)    { ' [exception]' }
+                       elseif ($isDto)      { ' [dto]' }
                        elseif ($hasFactory) { ' [factory candidate]' }
-                       else              { '' }
+                       else                 { '' }
                 Write-Host "[create] $(Get-RelativeTestPath $outFile)$tag" -ForegroundColor Green
             } elseif (Test-Path $outFile) {
                 Write-Host "[skip]   $(Get-RelativeTestPath $outFile) already exists" -ForegroundColor DarkGray
