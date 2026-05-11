@@ -56,6 +56,7 @@ When reviewing an existing pipeline, check:
 9. **Branch scoping** — deployment stages gated on correct source branch?
 10. **Service connections** — separate connections per environment (dev/prod)?
 11. **Caching** — NuGet/npm/pip packages cached to avoid redundant downloads on repeated runs?
+12. **Docker + private NuGet feeds** — if a Dockerfile runs `dotnet restore`, does it copy `nuget.config` and inject feed credentials via `--mount=type=secret`? A missing `nuget.config` silently falls back to nuget.org and fails with `NU1102`. See `patterns/docker.md` for the full fix.
 
 ## Output format
 
