@@ -102,6 +102,62 @@ When a test class covers multiple methods or scenarios, use comment dividers to 
 public void Constructor_...
 ```
 
+## Gotchas
+
+### One statement per line — never concatenate on a single line
+
+Every assertion and every statement must be on its own line. Do **not** place two statements on the same line — not even when they are logically related:
+
+```csharp
+// Wrong — two assertions crammed onto one line
+Assert.AreEqual(10, info.PageSize);        Assert.AreEqual(0, info.TotalItems);
+
+// Correct
+Assert.AreEqual(10, info.PageSize);
+Assert.AreEqual(0, info.TotalItems);
+```
+
+This applies to all generated test files. When writing file content via the Write tool, check each line before issuing the call — if any line contains more than one semicolon, split it.
+
+### Avoid repeated assertions across test methods (exception classes)
+
+When every constructor of a class produces the **same** value for a given property (e.g., all exception constructors set the same `ResponseStatus`), verify that value **once** — in the test for the default constructor or a dedicated "status" test. Do not repeat the assertion in every subsequent constructor test.
+
+- **Wrong:** `StringCtorSetsPreconditionFailedAndPreservesMessage` — "PreconditionFailed" is already asserted in `DefaultCtorSetsPreconditionFailed`. The string-ctor test only needs to verify what is unique to it: that the message is preserved.
+- **Right:** `StringCtorPreservesMessage` — focused on the ONE thing the string constructor adds.
+
+The same generic name (`StringCtorPreservesMessage`, `StringInnerCtorChainsCorrectly`) is acceptable across multiple exception test classes; the test class name provides the exception-specific context.
+
+**Only include a status in a constructor test name when that constructor sets a DIFFERENT status from the default constructor** (e.g., `ContractException` where default → `NotAccepted` but string ctor → `NotAcceptable`).
+
+```csharp
+// All three ConfigurationException ctors use PreconditionFailed.
+// Test the status once — in the default-ctor test.
+[TestMethod]
+public void DefaultCtorSetsPreconditionFailed()
+{
+    ConfigurationException ex = new();
+    Assert.AreEqual(ResponseStatus.PreconditionFailed, ex.ResponseStatus);
+    Assert.IsFalse(string.IsNullOrEmpty(ex.Message));
+}
+
+[TestMethod]
+public void StringCtorPreservesMessage()   // no status assertion — already covered above
+{
+    ConfigurationException ex = new("config missing");
+    Assert.AreEqual("config missing", ex.Message);
+}
+
+[TestMethod]
+public void StringInnerCtorChainsCorrectly()   // no status assertion — same reason
+{
+    InvalidOperationException inner = new("inner");
+    ConfigurationException ex = new("outer", inner);
+    Assert.AreEqual("outer", ex.Message);
+    Assert.AreEqual(inner, ex.InnerException);
+}
+```
+
 ## Batch workflow — processing the untested-file list
 
 When the user asks to add or fix tests across a project rather than for a single class, run

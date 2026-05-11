@@ -55,6 +55,67 @@ The `DotNetCoreCLI@2` `publishVstsFeed` task input does not reliably expand `$(V
     FEED_URL: $(AZURE_ARTIFACTS_FEED_URL)
 ```
 
+### ⚠️ Pitfall: avoid variable groups for publish configuration — prefer pipeline artifacts and dynamic feed URL
+
+Using a Library variable group to pass `CSPROJ_PATH` or the feed URL to the Publish stage causes a hard pipeline validation error before any stage runs:
+
+> _The pipeline is not valid. Stage Publish: Variable group `my-group` could not be found._
+
+The group must be manually created in **Pipelines → Library** and authorized for each pipeline — a friction point that is easy to forget and impossible to detect until the pipeline runs.
+
+**Preferred pattern (no variable group needed):**
+
+1. Upload the `.nupkg` as a pipeline artifact in the Build stage (reuse the package already on disk if `GeneratePackageOnBuild=true`).
+2. In the Publish stage, set `checkout: none`, download the artifact, and construct the feed URL dynamically from predefined variables.
+
+```yaml
+# Build stage — after dotnet build
+- task: CopyFiles@2
+  displayName: Stage NuGet packages
+  inputs:
+    SourceFolder: src
+    Contents: '**/*.nupkg'
+    TargetFolder: '$(Build.ArtifactStagingDirectory)/packages'
+
+- task: PublishPipelineArtifact@1
+  displayName: Upload NuGet packages
+  inputs:
+    targetPath: '$(Build.ArtifactStagingDirectory)/packages'
+    artifact: nuget-packages
+
+# Publish stage — no restore/build/pack needed
+- checkout: none
+
+- task: DownloadPipelineArtifact@2
+  displayName: Download NuGet packages
+  inputs:
+    artifact: nuget-packages
+    targetPath: '$(Pipeline.Workspace)/packages'
+
+- task: NuGetAuthenticate@1
+  displayName: Authenticate to Azure Artifacts
+
+- script: |
+    set -euo pipefail
+    ORG=$(echo "$COLLECTION_URI" | sed 's|https://dev.azure.com/||; s|/$||')
+    PROJECT_ENCODED="${TEAM_PROJECT// /%20}"
+    FEED_URL="https://pkgs.dev.azure.com/${ORG}/${PROJECT_ENCODED}/_packaging/${FEED_NAME}/nuget/v3/index.json"
+    echo "Pushing to: $FEED_URL"
+    while IFS= read -r -d '' pkg; do
+      dotnet nuget push "$pkg" \
+        --source "$FEED_URL" \
+        --api-key AzureArtifacts \
+        --skip-duplicate
+    done < <(find "$(Pipeline.Workspace)/packages" -name "*.nupkg" -print0)
+  displayName: Push NuGet package
+  env:
+    COLLECTION_URI: $(System.CollectionUri)
+    TEAM_PROJECT: $(System.TeamProject)
+    FEED_NAME: vault-packages   # or a top-level YAML variable
+```
+
+Declare `artifactsFeedName` as a top-level YAML variable (not in a group) so it is visible in the file and requires no Library setup.
+
 ### ⚠️ Pitfall: build service account needs Contributor on the feed
 
 A 403 `lacks permission to complete this action. You need to have 'AddPackage'` means the pipeline's build service identity does not have the right feed permission. Fix in Azure DevOps UI:

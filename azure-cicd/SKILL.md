@@ -39,6 +39,7 @@ Each pattern has complete YAML and adaptation notes in its reference file.
 | [Variable groups & Key Vault](patterns/variables-and-secrets.md) | Azure DevOps | Library groups, Key Vault-linked secrets, stage-scoped variables |
 | [Docker build & push](patterns/docker.md) | Azure DevOps | Build and push to ACR via service connection |
 | [Code analysis — Cobertura](patterns/code-analysis-cobertura.md) | Azure DevOps | Cobertura coverage + cyclomatic complexity, HTML reports, job summary |
+| [Run retention leases](patterns/run-retention.md) | Azure DevOps | Tiered retention via REST API leases; minimum days per pipeline type |
 
 ## Review checklist
 
@@ -62,3 +63,4 @@ When reviewing an existing pipeline, check:
 - If creating from scratch, ask clarifying questions only if essential information is missing (project structure, target environment count, Docker vs App Service, Azure DevOps vs GitHub Actions)
 - When reviewing, list issues grouped by severity: **Critical** (security, broken pipeline), **Warning** (missing best practices), **Suggestion** (optional improvements)
 - Show diffs when modifying an existing file, not a full rewrite unless the structure needs major changes
+- After generating or applying a pattern, remind the user to review the output against their actual project — pattern defaults (SDK versions, TFMs, pool images, source globs) may not match and will cause failures if used verbatim
