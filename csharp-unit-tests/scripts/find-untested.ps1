@@ -56,6 +56,7 @@ foreach ($file in $sourceFiles) {
     # Skip generated files and infrastructure files
     if ($baseName -match '\.(g|AssemblyInfo|GlobalUsings)$') { continue }
     if ($baseName -match '^(Program|Startup|AssemblyInfo)$') { continue }
+    if ($file.FullName -match '\\Migrations\\') { continue }
 
     # Skip interfaces — they have no testable implementation
     if ($baseName -match '^I[A-Z]') { continue }

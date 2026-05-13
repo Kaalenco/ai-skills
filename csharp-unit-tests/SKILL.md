@@ -104,6 +104,33 @@ public void Constructor_...
 
 ## Gotchas
 
+### `[TestCategory]` is only matched at the class level by `dotnet test --filter`
+
+When using `dotnet test --filter "TestCategory=X"` or `TestCategory!=X`, the expression only
+matches categories applied to the **class** — not to individual test methods. Applying
+`[TestCategory]` on a method has no effect on filtering.
+
+```csharp
+// Wrong — the filter "TestCategory!=LongRunning" will NOT exclude this method
+[TestClass]
+public class MyTests {
+    [TestMethod]
+    [TestCategory("LongRunning")]  // ignored by dotnet test --filter
+    public async Task SlowTimingTest() { ... }
+}
+
+// Correct — extract slow tests into a dedicated class with the category on the class
+[TestClass]
+[TestCategory("LongRunning")]
+public class LongRunningTests {
+    [TestMethod]
+    public async Task SlowTimingTest() { ... }
+}
+```
+
+This applies to all filter expressions, including `TestCategory=Integration` and negations.
+Always put `[TestCategory]` on the class when the intent is CI filtering.
+
 ### One statement per line — never concatenate on a single line
 
 Every assertion and every statement must be on its own line. Do **not** place two statements on the same line — not even when they are logically related:

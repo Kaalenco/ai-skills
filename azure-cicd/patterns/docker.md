@@ -6,8 +6,8 @@ Build a Docker image and push it to Azure Container Registry via a service conne
 
 ```yaml
 variables:
-  imageRepository: 'my-app'
-  containerRegistry: 'ACR-ServiceConnection'
+  imageRepository: '<app>-api'         # follows naming convention
+  containerRegistry: 'ACR-SC-<app>'    # service connection name — literal, never from variable group
   dockerfilePath: '**/Dockerfile'
   tag: $(Build.BuildId)
 
@@ -19,9 +19,7 @@ steps:
     repository: $(imageRepository)
     command: build
     Dockerfile: $(dockerfilePath)
-    tags: |
-      $(tag)
-      latest
+    tags: $(tag)
 
 - task: Docker@2
   displayName: Push image
@@ -30,35 +28,78 @@ steps:
     containerRegistry: $(containerRegistry)
     repository: $(imageRepository)
     command: push
-    tags: |
-      $(tag)
-      latest
+    tags: $(tag)
 ```
 
 ## Multi-stage with image reuse
 
-Build once, deploy the same image across environments using the build ID as the stable tag:
+Separate the .NET build/test from the Docker push into distinct stages. This keeps build failures fast and allows a `CodeAnalysis` (or other) stage to run in parallel with `Push` before deploy.
 
 ```yaml
 stages:
 - stage: Build
+  displayName: Build & Test
   jobs:
-  - job: BuildImage
+  - job: BuildAndTest
+    pool:
+      vmImage: ubuntu-latest
     steps:
-    - task: Docker@2
-      displayName: Build and push
+    - task: DotNetCoreCLI@2
+      displayName: Restore packages
       inputs:
-        containerRegistry: 'ACR-ServiceConnection'
-        repository: 'my-app'
-        command: buildAndPush
-        Dockerfile: '**/Dockerfile'
-        tags: $(Build.BuildId)
+        command: restore
+        projects: 'src/**/*.csproj'
 
-- stage: DeployDev
+    - task: DotNetCoreCLI@2
+      displayName: Build
+      inputs:
+        command: build
+        projects: 'src/**/*.csproj'
+        arguments: '--no-restore --configuration Release'
+
+    - task: DotNetCoreCLI@2
+      displayName: Run unit tests
+      inputs:
+        command: test
+        projects: 'src/**/*.UnitTests.csproj'
+        arguments: '--no-build --configuration Release'
+        publishTestResults: true
+
+- stage: Push
+  displayName: Push images
   dependsOn: Build
   jobs:
+  - job: PushImages
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - task: AzureCLI@2
+      displayName: Log in to ACR
+      inputs:
+        azureSubscription: ACR-SC-<app>    # literal — never from a variable group
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: az acr login --name <app><region>.azurecr.io
+
+    - script: |
+        DOCKER_BUILDKIT=1 docker build \
+          --secret id=azure_token,env=SYSTEM_ACCESSTOKEN \
+          --file src/MyApp/Dockerfile \
+          --tag <app><region>.azurecr.io/<app>-api:$(Build.BuildId) \
+          src
+        docker push <app><region>.azurecr.io/<app>-api:$(Build.BuildId)
+      displayName: Build and push image
+      env:
+        SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+- stage: DeployDev
+  displayName: Deploy to Dev
+  dependsOn: Push    # or [Push, CodeAnalysis] if a parallel analysis stage exists
+  variables:
+  - group: <app>-dev-vars
+  jobs:
   - deployment: Deploy
-    environment: 'dev'
+    environment: <app>-dev
     strategy:
       runOnce:
         deploy:
@@ -66,16 +107,41 @@ stages:
           - task: AzureWebAppContainer@1
             displayName: Deploy container to App Service
             inputs:
-              azureSubscription: 'Azure-ServiceConnection-Dev'
-              appName: 'my-app-dev'
-              containers: 'myacr.azurecr.io/my-app:$(Build.BuildId)'
+              azureSubscription: Azure-SC-<app>-dev    # literal — never from a variable group
+              appName: $(appName)
+              containers: '<app><region>.azurecr.io/<app>-api:$(Build.BuildId)'
+```
+
+### Parallel Push + CodeAnalysis
+
+When the pipeline also has a `CodeAnalysis` stage (coverage, complexity), both it and `Push` can depend on `Build` and run in parallel. `DeployDev` then waits for both:
+
+```
+Build  ──►  Push          ──►  DeployDev
+       ──►  CodeAnalysis  ──►
+```
+
+```yaml
+- stage: Push
+  dependsOn: Build
+  ...
+
+- stage: CodeAnalysis
+  dependsOn: Build
+  ...
+
+- stage: DeployDev
+  dependsOn:
+  - Push
+  - CodeAnalysis
+  ...
 ```
 
 ## Notes
 
-- The `containerRegistry` value is the **service connection name** in Azure DevOps, not the ACR login server URL.
+- The `containerRegistry` value is the **service connection name** in Azure DevOps, not the ACR login server URL. Follows the convention `ACR-SC-<app>` — must be a literal in YAML.
 - Tag with `$(Build.BuildId)` (stable, numeric) rather than `$(Build.SourceVersion)` (40-char SHA) for readability in ACR.
-- The `latest` tag is convenient locally but makes rollback harder — always also push the numbered tag.
+- Do not push a `latest` tag for deployed images — it makes rollback impossible. Use the build ID tag only.
 
 ## Gotcha: private NuGet feeds in Docker integration tests
 
