@@ -9,8 +9,13 @@
 
     Naming heuristics:
       - name ends in Exception        → For<ClassName>UnitTests  (avoids CA1711)
+      - validator (see below)         → Validating<ClassName>
       - public static class           → Using<ClassName>
       - anything else                 → With<ClassName>
+
+    Validator detection (name ends in Validator, implements IRuntimeValidator<...>,
+    or declares a public Validate/TryValidate/IsValid method): takes priority over
+    the static/regular check, generates a Validating<ClassName> stub.
 
     DTO detection (name ends in Model/Dto, or implements ICommandRequest/ICommandResponse):
     generates a JSON serialization stub instead of a generic placeholder.
@@ -69,7 +74,8 @@ function Get-RootNamespace ([string]$ProjectDir) {
     return [IO.Path]::GetFileNameWithoutExtension($csproj.Name)
 }
 
-function Get-Prefix ([string]$SourceFile) {
+function Get-Prefix ([string]$SourceFile, [string]$ClassName) {
+    if ($ClassName -and (Test-IsValidator $SourceFile $ClassName)) { return 'Validating' }
     $content = Get-Content $SourceFile -Raw
     if ($content -match 'public\s+static\s+class\b') { return 'Using' }
     return 'With'
@@ -90,6 +96,14 @@ function Get-TestNamespace ([string]$RelativePath, [string]$Root) {
 
 function Test-IsException ([string]$ClassName) {
     return $ClassName -match 'Exception$'
+}
+
+function Test-IsValidator ([string]$SourceFile, [string]$ClassName) {
+    if ($ClassName -match '(?i)Validator$') { return $true }
+    $content = Get-Content $SourceFile -Raw
+    if ($content -match 'class\s+\w+[^{]*:\s*[^{]*\bIRuntimeValidator\b') { return $true }
+    if ($content -match 'public\s+\S+\s+(Validate|TryValidate|IsValid)\s*\(') { return $true }
+    return $false
 }
 
 function New-ExceptionStub ([string]$ClassName, [string]$Namespace) {
@@ -215,6 +229,43 @@ public sealed class With$ClassName
 "@
 }
 
+function New-ValidatorStub ([string]$ClassName, [string]$Namespace) {
+    return @"
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+namespace $Namespace;
+
+// TODO: confirm the validator's return shape and delete the other two examples below:
+//   - Result object : ResponseStatus / ValidationResult Validate(T instance)
+//   - Predicate      : bool IsValid(T instance)
+//   - Throwing       : void Validate(T instance) — throws on invalid input
+[TestClass]
+public sealed class Validating$ClassName
+{
+    private readonly $ClassName _sut = new();
+
+    // TODO: replace with a helper that builds a fully valid instance
+    // private static SomeRequest ValidInstance() => new() { ... };
+
+    // -------------------------------------------------------------------------
+    // Validate
+    // -------------------------------------------------------------------------
+
+    [TestMethod]
+    public void Validate_AllFieldsValid_ReturnsSuccess()
+    {
+        // TODO
+    }
+
+    [TestMethod]
+    public void Validate_Placeholder_Fails()
+    {
+        // TODO: one test per validation rule — happy path + each distinct failure case
+    }
+}
+"@
+}
+
 function Get-RelativeTestPath ([string]$AbsPath) {
     return [IO.Path]::GetRelativePath($testDir, $AbsPath)
 }
@@ -250,14 +301,18 @@ foreach ($line in $plan) {
 
         'create' {
             $isException = Test-IsException $baseName
-            $isDto       = -not $isException -and (Test-IsDto $sourceFile $baseName)
-            $prefix      = if ($isException -or $isDto) { 'With' } else { Get-Prefix $sourceFile }
+            $isValidator = -not $isException -and (Test-IsValidator $sourceFile $baseName)
+            $isDto       = -not $isException -and -not $isValidator -and (Test-IsDto $sourceFile $baseName)
+            $prefix      = if ($isException -or $isDto) { 'With' }
+                            elseif ($isValidator)        { 'Validating' }
+                            else                          { Get-Prefix $sourceFile }
             $namespace   = Get-TestNamespace $relative $rootNs
-            $hasFactory  = -not $isException -and -not $isDto -and (Test-HasFactoryMethods $sourceFile $baseName)
+            $hasFactory  = -not $isException -and -not $isValidator -and -not $isDto -and (Test-HasFactoryMethods $sourceFile $baseName)
 
             $outName = if ($isException) { "For${baseName}UnitTests.cs" } else { "$prefix$baseName.cs" }
-            $stub    = if ($isException) { New-ExceptionStub $baseName $namespace }
-                       elseif ($isDto)  { New-DtoStub $baseName $namespace }
+            $stub    = if ($isException)    { New-ExceptionStub $baseName $namespace }
+                       elseif ($isValidator) { New-ValidatorStub $baseName $namespace }
+                       elseif ($isDto)      { New-DtoStub $baseName $namespace }
                        else             { New-Stub $prefix $baseName $namespace $hasFactory }
 
             $outFile = if ($subFolder) {
@@ -268,6 +323,7 @@ foreach ($line in $plan) {
 
             if ($WhatIf) {
                 $tag = if ($isException)    { ' [exception]' }
+                       elseif ($isValidator) { ' [validator]' }
                        elseif ($isDto)      { ' [dto]' }
                        elseif ($hasFactory) { ' [factory candidate]' }
                        else                 { '' }
@@ -287,7 +343,7 @@ foreach ($line in $plan) {
         }
 
         'rename' {
-            $prefix  = Get-Prefix $sourceFile
+            $prefix  = Get-Prefix $sourceFile $baseName
             $oldName = "${baseName}Tests.cs"
             $newName = "$prefix$baseName.cs"
 

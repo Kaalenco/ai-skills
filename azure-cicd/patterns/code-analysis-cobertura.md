@@ -81,7 +81,11 @@ own restore/build steps as shown here.
 
   - bash: |
       mkdir -p reports/complexity
-      lizard src/ -x "*.UnitTests" -C 10 --html > reports/complexity/index.html
+      lizard src/ \
+        -x "*.UnitTests" \
+        -x "*Generated.cs" \
+        -x "*/Migrations/*" \
+        -C 10 --html > reports/complexity/index.html
     displayName: Generate complexity report
 
   - bash: |
@@ -89,6 +93,8 @@ own restore/build steps as shown here.
       PIPELINE_SUMMARY_FILE="$SUMMARY_FILE" python3 scripts/az-code-analysis-summary.py \
         --source src/ \
         --exclude "*.UnitTests" \
+        --exclude "*Generated.cs" \
+        --exclude "*/Migrations/*" \
         --coverage-dir $COVERAGE_DIR
       echo "##vso[task.uploadsummary]$SUMMARY_FILE"
     displayName: Write pipeline summary
@@ -114,7 +120,7 @@ own restore/build steps as shown here.
 ## Adapting to a new project
 
 - The test glob `src/**/*.UnitTests.csproj` and source root `src/` work for any repo following the `src/MyApp` / `src/MyApp.UnitTests` layout. If source lives elsewhere, adjust both the lizard command and `--source`.
-- The `*.UnitTests` exclude pattern strips all `*.UnitTests` directories from the lizard analysis. Change `--exclude` if your test project naming differs.
+- The default exclude patterns strip test projects (`*.UnitTests`), auto-generated files (`*Generated.cs`), and migration files (`*/Migrations/*`) from lizard. Pass additional `--exclude` flags for any other paths to omit; each flag takes one glob pattern.
 - Change `-C 10` to adjust the CCN threshold; mirror it in `CCN_THRESHOLD` at the top of `az-code-analysis-summary.py`.
 - The `--framework net8.0` flag pins coverage collection to one TFM. Change to match the lowest common target in the project.
 - Remove `dependsOn: Build` if this runs as a standalone pipeline rather than after a `Build` job.
@@ -128,7 +134,7 @@ See [`scripts/az-code-analysis-summary.py`](../scripts/az-code-analysis-summary.
 | Flag | Default | Description |
 |---|---|---|
 | `--source` | `src` | Source root passed to lizard |
-| `--exclude` | `*.UnitTests` | Lizard `-x` pattern; excludes test projects from complexity analysis |
+| `--exclude` | _(none)_ | Lizard `-x` pattern; repeatable — pass once per pattern to exclude paths from complexity analysis |
 | `--coverage-dir` | `src/TestResults/Coverage` | Root directory containing `coverage.cobertura.xml` files (all are aggregated) |
 
 **Output sections:**

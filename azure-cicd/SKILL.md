@@ -84,6 +84,16 @@ Each pattern has complete YAML and adaptation notes in its reference file.
 | [Code analysis — Cobertura](patterns/code-analysis-cobertura.md) | Azure DevOps | Cobertura coverage + cyclomatic complexity, HTML reports, job summary |
 | [Run retention leases](patterns/run-retention.md) | Azure DevOps | Tiered retention via REST API leases; minimum days per pipeline type |
 | [Pipelines-explained doc](patterns/pipelines-explained.md) | Any | Template and guidelines for `docs/pipelines-explained.md` — human-readable pipeline reference for onboarding and debugging |
+| [App code verification](patterns/app-code-verification.md) | Any | Dockerfile and app code checks that cause silent deployment failures if missed |
+
+## App code verification
+
+Apply `patterns/app-code-verification.md` in these situations:
+
+- **Always** when creating a new pipeline for a web app or API — read the Dockerfile and application entry point alongside the pipeline YAML and report any findings before producing the final YAML.
+- **On request** when the user asks to review a webapp or API for deployment readiness (keywords: "webapp", "api", "activation failed", "crash", "startup").
+
+The checks cover Dockerfile and app code issues — not pipeline YAML — that cause silent deployment failures (ACA **Activation failed**, Kubernetes `CrashLoopBackOff`).
 
 ## Review checklist
 
@@ -102,7 +112,7 @@ When reviewing an existing pipeline, check:
 11. **Caching** — NuGet/npm/pip packages cached to avoid redundant downloads on repeated runs?
 12. **Docker + private NuGet feeds** — if a Dockerfile runs `dotnet restore`, does it copy `nuget.config` and inject feed credentials via `--mount=type=secret`? A missing `nuget.config` silently falls back to nuget.org and fails with `NU1102`. See `patterns/docker.md` for the full fix.
 13. **ACA Job config** — are values passed via `--env-vars KEY=VALUE`, not `--args --key value`? `--args` uses argparse `nargs='+'` which stops collecting values at the first `--`-prefixed token, silently dropping all subsequent arguments.
-14. **ACA Job image update** — is `az containerapp job update --image` avoided? In CLI ≤2.85.0 the image never reaches the PATCH body (error: `ContainerAppImageRequired`). Use the `az rest` + `jq` workaround from `patterns/container-apps-deploy.md` instead.
+14. **ACA Job image at start time** — does `az containerapp job start` include `--image`? Without it, `--env-vars` triggers a container entry in the execution body with no image field → `ContainerAppImageRequired` (CLI ≤2.85.0). `--image` fixes it and makes a separate `az containerapp job update` step unnecessary. See `patterns/container-apps-deploy.md`.
 
 ## Output format
 

@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     Scans the source project for .cs files and checks whether a matching
-    With*, Using*, or Creating* test file exists in the test project.
+    With*, Using*, Creating*, or Validating* test file exists in the test project.
     Reports files with no coverage and files whose test class is misnamed.
 
     Use -ListOnly to emit bare paths suitable for scripting or skill input.
@@ -68,7 +68,8 @@ foreach ($file in $sourceFiles) {
                } else {
                    ($testFileNames -contains "With$baseName") -or
                    ($testFileNames -contains "Using$baseName") -or
-                   ($testFileNames -contains "Creating$baseName")
+                   ($testFileNames -contains "Creating$baseName") -or
+                   ($testFileNames -contains "Validating$baseName")
                }
 
     $relative = [IO.Path]::GetRelativePath($sourceDir, $file.FullName)
@@ -90,7 +91,7 @@ if ($ListOnly) {
 }
 
 if ($misnamed.Count -gt 0) {
-    Write-Host "Naming convention violations — rename to With*/Using*/Creating* ($($misnamed.Count)):" -ForegroundColor Cyan
+    Write-Host "Naming convention violations — rename to With*/Using*/Creating*/Validating* ($($misnamed.Count)):" -ForegroundColor Cyan
     foreach ($item in $misnamed | Sort-Object) {
         Write-Host "  - $item"
     }

@@ -1,8 +1,59 @@
 # Pattern: Container Apps Deploy (Azure DevOps)
 
-Update a Container App to a new image, run a pre-deploy migration job, and optionally verify with a smoke test. Covers the full deploy sequence: Key Vault secret load → ACA Job migration → Container App update.
+Update a Container App to a new image, run a pre-deploy migration job, and optionally verify with a smoke test. Covers the full deploy sequence: sync Key Vault references to ACA → ACA Job migration → Container App update.
 
 Placeholders follow the skill naming convention (`<app>`, `<env>`, `<region>`). Replace with concrete values — e.g. `<app>` = `myapp`, `<env>` = `dev`, `<region>` = `ne` → `Azure-SC-myapp-dev`, `myappne.azurecr.io`.
+
+## Sync Key Vault references to ACA (pre-deploy)
+
+Run this step first when secrets are stored in Key Vault and referenced by the Container App and ACA Job via `secretref:`. It registers the Key Vault references on both resources — idempotent, safe to run on every deploy.
+
+Requires two variable group entries: `keyVaultUri` (e.g. `https://<app>-<env>-<region>-kv.vault.azure.net`) and `managedIdentityId` (full ARM resource ID of the user-assigned managed identity — retrieve with `az identity show ... --query id`).
+
+```yaml
+- task: AzureCLI@2
+  displayName: Sync Key Vault secrets to ACA
+  inputs:
+    azureSubscription: Azure-SC-<app>-<env>
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      set -euo pipefail
+      KV_BASE="$(keyVaultUri)/secrets"
+      IDENTITY="$(managedIdentityId)"
+
+      az containerapp job secret set \
+        --name $(dbJobName) \
+        --resource-group $(resourceGroupApi) \
+        --secrets \
+          "db-vault-connection=keyvaultref:$KV_BASE/db-vault-connection,identityref:$IDENTITY" \
+          "db-identity-connection=keyvaultref:$KV_BASE/db-identity-connection,identityref:$IDENTITY"
+
+      az containerapp secret set \
+        --name $(appName) \
+        --resource-group $(resourceGroupApi) \
+        --secrets \
+          "db-vault-connection=keyvaultref:$KV_BASE/db-vault-connection,identityref:$IDENTITY" \
+          "db-identity-connection=keyvaultref:$KV_BASE/db-identity-connection,identityref:$IDENTITY"
+```
+
+The migration job start and container app update then reference secrets by name:
+
+```bash
+# Migration job — secretref: in --env-vars resolves against secrets defined on the job
+--env-vars "ConnectionStrings__DefaultConnection=secretref:db-vault-connection"
+
+# Container App — secretref: in --set-env-vars resolves against secrets defined on the app
+--set-env-vars "ConnectionStrings__DefaultConnection=secretref:db-vault-connection"
+```
+
+Secret *values* never appear in the pipeline, in pipeline logs, or in the ACA revision configuration. ACA fetches them from Key Vault at runtime using the managed identity.
+
+**Prerequisite:** the managed identity must have **Key Vault Secrets User** role on the Key Vault. Without it the sync step succeeds (it only stores the reference URI) but ACA will fail to resolve the value at runtime with `SecretValueRetrievalFailed`.
+
+**ACA Jobs caveat:** `az containerapp job secret set` does not reliably support `keyvaultref:` in all CLI versions (known to fail with `ContainerAppSecretKeyVaultUrlInvalid / from a different cloud` even when the URL and identity are correct). For migration jobs and other short-lived runners, prefer the `AzureKeyVault@2` task to load secrets as pipeline variables and pass them as plain `--env-vars` to `az containerapp job start`. Job execution env vars are ephemeral — they exist only in the execution record, not in the persistent job definition — so this is an acceptable trade-off.
+
+---
 
 ## Container App — image update
 
@@ -45,29 +96,14 @@ Run a Container App Job before the API update to apply database migrations. The 
     inlineScript: |
       set -euo pipefail
 
-      # az containerapp job update --image is broken in CLI ≤2.85 — image never reaches the PATCH body.
-      # Workaround: read the current template, patch with jq, push via az rest. See Notes.
+      # Pass --image explicitly: az containerapp job start with --env-vars constructs an
+      # execution-override template with a container entry but no image field, triggering
+      # ContainerAppImageRequired (CLI ≤2.85.0 bug). --image includes it in the same body.
       NEW_IMAGE="<app><region>.azurecr.io/<app>-db:$(Build.BuildId)"
-      echo "Updating $(dbJobName) image to: $NEW_IMAGE"
-      SUB_ID=$(az account show --query id --output tsv)
-      UPDATED_TEMPLATE=$(az containerapp job show \
-        --name "$(dbJobName)" \
-        --resource-group "$(resourceGroupApi)" \
-        --query "properties.template" \
-        --output json | \
-        jq -c --arg img "$NEW_IMAGE" '(.containers[] | .image) = $img')
-      az rest \
-        --method PATCH \
-        --url "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$(resourceGroupApi)/providers/Microsoft.App/jobs/$(dbJobName)?api-version=2024-03-01" \
-        --body "{\"properties\":{\"template\":$UPDATED_TEMPLATE}}" \
-        --output none
-      echo "Image updated"
-
-      # Pass config as --env-vars, not --args — see the critical gotcha in Notes.
-      # Values are ephemeral: present only in this execution record, never in the job definition.
       JOB_EXEC=$(az containerapp job start \
         --name $(dbJobName) \
         --resource-group $(resourceGroupApi) \
+        --image "$NEW_IMAGE" \
         --env-vars "Database__Provider=sqlserver" \
                    "ConnectionStrings__DefaultConnection=$(db-connection)" \
         --query "name" \
@@ -90,29 +126,27 @@ Run a Container App Job before the API update to apply database migrations. The 
         sleep 10
       done
 
-      echo "Fetching container logs for $JOB_EXEC (waiting 30s for Log Analytics ingestion)"
-      sleep 30
-
-      ENV_ID=$(az containerapp job show \
-        --name "$(dbJobName)" \
-        --resource-group "$(resourceGroupApi)" \
-        --query "properties.environmentId" \
-        --output tsv)
-
-      WORKSPACE_ID=$(az containerapp env show \
-        --ids "$ENV_ID" \
-        --query "properties.appLogsConfiguration.logAnalyticsConfiguration.customerId" \
-        --output tsv)
-
-      az monitor log-analytics query \
-        --workspace "$WORKSPACE_ID" \
-        --analytics-query "ContainerAppConsoleLogs_CL | where ContainerJobExecutionName_s == '$JOB_EXEC' | project TimeGenerated, Log_s | order by TimeGenerated asc | limit 200" \
-        --output table \
-        || echo "(Log Analytics query failed — check workspace permissions or table name)"
-
+      echo "##vso[task.setvariable variable=dbJobExec]$JOB_EXEC"
       [ "$FINAL_STATUS" = "Succeeded" ] && { echo "Migrations applied"; exit 0; }
       [ "$FINAL_STATUS" = "Failed" ]    && { echo "Migration job failed"; exit 1; }
       echo "Migration timed out after 10 minutes"; exit 1
+
+- task: AzureCLI@2
+  displayName: Show migration logs
+  condition: always()
+  inputs:
+    azureSubscription: Azure-SC-<app>-<env>
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      az containerapp job logs show \
+        --name $(dbJobName) \
+        --resource-group $(resourceGroupApi) \
+        --execution "$(dbJobExec)" \
+        --container "$(dbJobName)" \
+        --format text \
+        --tail 300 \
+        || echo "(Log retrieval failed — az containerapp job logs show may not be available on this CLI version)"
 ```
 
 ## Smoke test
@@ -185,25 +219,17 @@ The .NET Generic Host maps environment variables to config keys using `__` as th
 
 Azure DevOps validates service connection references before expanding variable groups. If `azureSubscription` is sourced from a variable group, validation fails with "service connection could not be found". Hardcode the connection name directly in the YAML.
 
-### `az containerapp job update --image` CLI bug (≤2.85.0)
+### `az containerapp job start --env-vars` drops the image (CLI ≤2.85.0)
 
-`az containerapp job update --image ... --container-name ...` produces:
+When `--env-vars` is passed, the CLI constructs an execution-override template with a container entry for the env vars but omits the `image` field. The ARM API rejects it:
 
 ```
 ERROR: (ContainerAppImageRequired) Container with name '<job-name>' must have an 'Image' property specified.
 ```
 
-The CLI sends a PATCH where the container object is present but the `image` field is missing — regardless of whether `--container-name` is supplied. The Azure API correctly rejects it. Both forms of the command fail:
+**Fix:** pass `--image <image>:<tag>` explicitly to `az containerapp job start`. The flag includes the image in the same execution body, satisfying the ARM API. No PATCH to the job definition is needed — the execution-level image overrides the stored definition for that run.
 
-```bash
-# without --container-name — fails
-az containerapp job update --name ... --image ...
-
-# with --container-name — also fails identically
-az containerapp job update --name ... --container-name ... --image ...
-```
-
-**Workaround:** bypass `az containerapp job update` entirely. Read `properties.template` from `az containerapp job show`, patch the image with `jq`, then push via `az rest PATCH`. This preserves all other template settings (volumes, env vars, scale rules) and is not affected by the CLI bug. See the YAML above for the full implementation.
+Note: `az containerapp job update --image` has a separate but similar bug (image never reaches the PATCH body regardless of `--container-name`). Avoid `az containerapp job update` for image updates entirely; rely on `--image` at start time.
 
 ### Migration job retry limit
 

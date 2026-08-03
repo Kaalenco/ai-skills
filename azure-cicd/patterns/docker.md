@@ -143,6 +143,24 @@ Build  ──►  Push          ──►  DeployDev
 - Tag with `$(Build.BuildId)` (stable, numeric) rather than `$(Build.SourceVersion)` (40-char SHA) for readability in ACR.
 - Do not push a `latest` tag for deployed images — it makes rollback impossible. Use the build ID tag only.
 
+## Gotcha: wrong runtime base image (`runtime` vs `aspnet`)
+
+`mcr.microsoft.com/dotnet/runtime` only ships `Microsoft.NETCore.App`. Any project that references a `Microsoft.AspNetCore.*` package — including `Microsoft.AspNetCore.Identity.EntityFrameworkCore`, `Microsoft.AspNetCore.Diagnostics.EntityFrameworkCore`, or any other ASP.NET Core library — pulls in the `Microsoft.AspNetCore.App` shared framework. At container start you'll see:
+
+```
+Framework: 'Microsoft.AspNetCore.App', version 'X.Y.Z' (x64)
+No frameworks were found.
+```
+
+This happens even for console apps and migration runners that are not web services.
+
+**Rule:**
+- Use `mcr.microsoft.com/dotnet/aspnet:<version>` whenever the project references any `Microsoft.AspNetCore.*` package.
+- Use `mcr.microsoft.com/dotnet/runtime:<version>` only for projects with zero ASP.NET Core dependencies (pure console/worker with only `Microsoft.Extensions.*`).
+- Use `mcr.microsoft.com/dotnet/runtime-deps:<version>` for self-contained single-file publishes only.
+
+When in doubt, use `aspnet` — it is a superset of `runtime` and the size difference is small (~30 MB).
+
 ## Gotcha: private NuGet feeds in Docker integration tests
 
 When a `dotnet restore` runs inside a Docker build (e.g., in an integration-test Dockerfile) and the project references a private Azure Artifacts feed, the restore will silently fall back to nuget.org and fail with `NU1102` — because the Dockerfile doesn't have the project's `nuget.config` or any feed credentials.

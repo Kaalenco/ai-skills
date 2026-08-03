@@ -27,8 +27,11 @@ Inspect the target class to determine the correct naming:
 | Regular class (instance methods) | `With<ClassName>` | `With<ClassName>.cs` | `patterns/regular-class.md` |
 | Static class or static method group | `Using<ClassName>` | `Using<ClassName>.cs` | `patterns/static-class.md` |
 | Factory methods (static creators returning instances) | `Creating<ClassName>` | `Creating<ClassName>.cs` | `patterns/factory-class.md` |
+| Validator class (implements `IRuntimeValidator<T>`, name ends in `Validator`, or primary method is `Validate`/`TryValidate`/`IsValid`) | `Validating<ClassName>` | `Validating<ClassName>.cs` | `patterns/validator-class.md` |
 
 **Exception classes** use `For<ClassName>UnitTests` to avoid the CA1711 analyser warning that forbids class names ending in `Exception`. This is the only case where `UnitTests` appears in a class name.
+
+**Validator classes** take priority over the regular-class row even though they have instance methods — a class matching the validator signals above should always use `Validating<ClassName>`, not `With<ClassName>`.
 
 A class may have both instance and factory methods. In that case, create separate test files:
 `With<ClassName>.cs` for instance tests, `Creating<ClassName>.cs` for factory tests.
@@ -103,6 +106,24 @@ public void Constructor_...
 ```
 
 ## Gotchas
+
+### Use MSTest v4 assertion helpers — not manual boolean checks
+
+MSTest v4 provides semantic assertion methods. Prefer them over `Assert.IsTrue(...)` with a manual comparison, which produces unreadable failure messages.
+
+| Instead of | Use |
+|---|---|
+| `Assert.IsTrue(x.Length > 0)` | `Assert.IsNotEmpty(x)` |
+| `Assert.AreEqual(n, x.Length)` | `Assert.HasCount(n, x)` |
+| `Assert.IsTrue(x > n)` | `Assert.IsGreaterThan(n, x)` |
+| `Assert.IsTrue(x < n)` | `Assert.IsLessThan(n, x)` |
+| `Assert.ThrowsException<T>(...)` | `Assert.Throws<T>(...)` |
+
+### Disposable test dependencies require IDisposable on the test class
+
+When the test class owns a disposable field (e.g. `HttpClient`), the field must be `readonly` with an inline initializer, and the test class must implement `IDisposable` with the full `Dispose(bool)` pattern. A bare `[TestCleanup]` is not sufficient — MSTest will not call it in all failure scenarios.
+
+See the **Disposable dependencies** section in `patterns/regular-class.md` for the full template.
 
 ### `[TestCategory]` is only matched at the class level by `dotnet test --filter`
 
@@ -263,6 +284,12 @@ For each stub file:
 - `(string message)` constructor: `Message` equals the argument.
 - `(string message, Exception inner)` constructor: both `Message` and `InnerException` set correctly.
 - The type is assignable to its expected base (e.g. `Assert.IsInstanceOfType<Exception>(ex)`).
+
+**Validator class (`Validating*`)**
+- One happy-path test: a fully valid instance passes.
+- One test per distinct validation rule, covering that rule's failure case — do not combine unrelated rules in one test.
+- Boundary/edge inputs per rule: `null`, empty, whitespace-only, min/max length or range.
+- See `patterns/validator-class.md` for the three return shapes (predicate, result object, throwing) and pick the one matching the class under test.
 
 **Enum or constants class**
 - Verify that each named value exists and has the expected underlying value.
