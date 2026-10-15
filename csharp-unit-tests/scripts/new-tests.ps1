@@ -45,6 +45,10 @@ param(
     [Parameter(Mandatory)]
     [string]$TestDir,
 
+    # Auto: detect from the test project's .csproj; xUnit v3 when no test project exists yet.
+    [ValidateSet('Auto', 'XUnit', 'MSTest')]
+    [string]$Framework = 'Auto',
+
     [switch]$WhatIf
 )
 
@@ -53,6 +57,28 @@ $ErrorActionPreference = 'Stop'
 
 $sourceDir = [IO.Path]::GetFullPath($SourceDir)
 $testDir   = [IO.Path]::GetFullPath($TestDir)
+
+if ($Framework -eq 'Auto') {
+    $Framework = 'XUnit'
+    $testCsproj = Get-ChildItem -Path $testDir -Filter '*.csproj' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($testCsproj) {
+        $csprojContent = Get-Content $testCsproj.FullName -Raw
+        if ($csprojContent -match 'Include="MSTest') { $Framework = 'MSTest' }
+    }
+}
+Write-Host "Framework: $Framework" -ForegroundColor DarkGray
+
+# Stubs are generated in MSTest syntax; convert them when targeting xUnit v3.
+function ConvertTo-Framework ([string]$Stub) {
+    if ($Framework -ne 'XUnit') { return $Stub }
+    $Stub = $Stub -replace 'using Microsoft\.VisualStudio\.TestTools\.UnitTesting;', 'using Xunit;'
+    $Stub = $Stub -replace '(?m)^\[TestClass\]\r?\n', ''
+    $Stub = $Stub -replace '\[TestMethod\]', '[Fact]'
+    $Stub = $Stub -replace 'Assert\.IsNotNull\(', 'Assert.NotNull('
+    $Stub = $Stub -replace 'Assert\.AreEqual\(', 'Assert.Equal('
+    $Stub = $Stub -replace 'Assert\.Inconclusive\(', 'Assert.Skip('
+    return $Stub
+}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -314,6 +340,7 @@ foreach ($line in $plan) {
                        elseif ($isValidator) { New-ValidatorStub $baseName $namespace }
                        elseif ($isDto)      { New-DtoStub $baseName $namespace }
                        else             { New-Stub $prefix $baseName $namespace $hasFactory }
+            $stub    = ConvertTo-Framework $stub
 
             $outFile = if ($subFolder) {
                 Join-Path $testDir $subFolder $outName

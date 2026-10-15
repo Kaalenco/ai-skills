@@ -1,11 +1,26 @@
 ---
-description: Create unit test projects and test files for C# class libraries. Use when asked to write tests, add a unit test project, check test coverage, or generate MSTest stubs for a specific C# class.
+description: Create unit test projects and test files for C# class libraries. Use when asked to write tests, add a unit test project, check test coverage, or generate xUnit v3 / MSTest stubs for a specific C# class.
 allowed-tools: Read Glob Grep Write Edit Bash
 ---
 
 # C# Unit Test Generator
 
 Read the target class file first to understand its structure, then follow these steps.
+
+## Step 0 - Determine the test framework
+
+Supported: **xUnit v3** (default for new projects) and **MSTest v4**. Determine the framework once per session, in this order:
+
+1. **Existing test project for the target library:** read its `.csproj`. `xunit.v3` package -> xUnit v3. `MSTest*` package -> MSTest.
+2. **Other test projects in the solution:** Glob `**/*.UnitTests.csproj` and `**/*.IntegrationTests.csproj`; use the framework they reference so the solution stays consistent.
+3. **ADR:** if the repo has `docs/adr-toc.md`, check for a testing / test framework decision and follow it.
+4. **Otherwise:** xUnit v3.
+
+The pattern files are written in MSTest syntax. When the framework is xUnit v3, also read `patterns/xunit-v3.md` and translate attributes, setup/teardown and assertions with it. Everything else in this skill (naming, namespaces, grouping, sealing, what to test) applies to both frameworks.
+
+**Mocking:** if the test project references `NSubstitute`, read `patterns/mocking-nsubstitute.md` before writing tests that need substitutes.
+
+**Integration tests** live in a separate `*.IntegrationTests.csproj`, never in the `*.UnitTests` project. This skill generates unit tests only.
 
 ## Step 1 — Locate or create the test project
 
@@ -85,7 +100,7 @@ public void OkReturnsSingletonWithCode200()
 public void MessageOrDefaultShouldReturnDefaultMessageWhenEmpty()
 ```
 
-Never append `Test` to method names. Never use `[DataTestMethod]` unless explicitly requested.
+Never append `Test` to method names. MSTest: never use `[DataTestMethod]` unless explicitly requested (`[TestMethod]` + `[DataRow]` suffices). xUnit v3: use `[Theory]` + `[InlineData]` for data-driven cases, `[Fact]` otherwise.
 
 ## Step 5 — Class sealing
 
@@ -106,6 +121,8 @@ public void Constructor_...
 ```
 
 ## Gotchas
+
+The first three gotchas below are MSTest-specific. For xUnit v3 equivalents (assertions, `IDisposable`, `[Trait]` filtering) see `patterns/xunit-v3.md`.
 
 ### Use MSTest v4 assertion helpers — not manual boolean checks
 
@@ -256,7 +273,7 @@ For each stub file:
 
 1. **Read in parallel** — issue one `Read` call for the stub file and one `Read` call for its corresponding source file in the same response.
 2. **Identify all public members** from the source: constructors, public methods, public properties with logic, operators, and static factory methods.
-3. **Replace** the entire body of `Placeholder()` / `Assert.Inconclusive` with real test methods. Keep the file structure (namespace, class declaration, grouping comments) and only replace the method content.
+3. **Replace** the entire body of `Placeholder()` / `Assert.Inconclusive` (MSTest) / `Assert.Skip` (xUnit v3) with real test methods. Keep the file structure (namespace, class declaration, grouping comments) and only replace the method content.
 
 #### What to test per class type
 

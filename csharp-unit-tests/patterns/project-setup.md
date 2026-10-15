@@ -1,5 +1,58 @@
 # Pattern: Unit Test Project Setup
 
+Pick the template matching the framework from Step 0 in SKILL.md: **xUnit v3** (default, below)
+or **MSTest** (further down).
+
+If the repo has a `Directory.Build.props` that already sets `TargetFramework`, `Nullable`,
+`ImplicitUsings` or `LangVersion`, omit those properties from the test `.csproj`.
+
+## xUnit v3 .csproj template
+
+xUnit v3 test projects are executables (`OutputType` `Exe`). Package versions were current
+as of 2026-10; check existing test projects and NuGet for newer stable versions.
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <!-- RootNamespace must match the main library - UnitTests is NOT part of the namespace -->
+    <RootNamespace>{MainProjectRootNamespace}</RootNamespace>
+    <NoWarn>CA1515;CS1591;CA1707</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageReference Include="xunit.v3" Version="4.0.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="NSubstitute" Version="6.2.0" />
+    <PackageReference Include="NSubstitute.Analyzers.CSharp" Version="1.0.17">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="coverlet.collector" Version="10.1.0">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\{MainProjectFolder}\{MainProject}.csproj" />
+  </ItemGroup>
+
+</Project>
+```
+
+Include the two NSubstitute packages only when the repo uses NSubstitute (check other test
+projects or the testing ADR).
+
+
 ## Naming convention
 
 | Main project | Test project |
@@ -9,7 +62,7 @@
 
 Place the test project in a sibling folder next to the main project (e.g., `src/MyApp.UnitTests/`).
 
-## .csproj template
+## MSTest .csproj template (existing MSTest repos)
 
 Replace `{MainProjectRootNamespace}`, `{MainProjectFolder}`, and `{MainProject}` with the actual values.
 
